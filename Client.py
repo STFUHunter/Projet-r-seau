@@ -66,26 +66,26 @@ def connect_to_server():
         print(f"Failed to connect: {e}")
         status_queue.put(f"Connection failed: {e}")
 
+
 def receive_data():
     """Thread function to continuously receive data from server"""
-    global player_id, game_started, connected  # Added 'connected' here
+    global player_id, game_started, connected
     
     while connected:
         try:
             if client_socket:
-                data = client_socket.recv(1024).decode().strip()
+                data = client_socket.recv(1024*4).decode().strip()
                 if not data:
                     status_queue.put("Disconnected from server")
                     break
-                
+
                 print(f"Received from server: {data}")
-                
-                # Process different message types
+
                 if data.startswith("ID:"):
-                    # Server assigned us an ID
                     player_id = int(data.split(":")[1])
                     status_queue.put(f"You are Player {player_id + 1} ({'X' if player_id == 0 else 'O'})")
-                
+                    client_socket.send("READY".encode())  # ✅ correct this from 'client' to 'client_socket'
+
                 elif data.startswith("STATE:"):
                     # Game state update
                     game_started = True
@@ -108,7 +108,6 @@ def receive_data():
                     move_queue.put({"type": "result"})
                 
                 elif data == "RESET":
-                    # Game reset
                     move_queue.put({"type": "reset"})
                     status_queue.put("Game has been reset")
                 
@@ -118,7 +117,7 @@ def receive_data():
                 
                 elif data.startswith("DISCONNECT:"):
                     status_queue.put("The other player has disconnected")
-                    
+                    break  # ✅ Ensure we break and end the thread here
         except Exception as e:
             print(f"Error receiving data: {e}")
             status_queue.put(f"Connection error: {e}")
@@ -126,6 +125,7 @@ def receive_data():
     
     print("Receive thread ended")
     connected = False
+
 
 def send_move(position):
     """Send a move to the server"""

@@ -3,16 +3,15 @@ import threading
 import time
 
 # Server configuration
-HOST = "127.0.0.1"  # Listen on all network interfaces
+HOST = "127.0.0.1"
 PORT = 5555
-clients = [None, None]  # Two players max
-game_state = [""] * 9  # Represents the 3x3 game board
-current_turn = 0  # Player 0 starts
+clients = [None, None]
+game_state = [" "] * 9
+current_turn = 0
 game_active = False
-lock = threading.Lock()  # Thread lock for synchronization
+lock = threading.Lock()
 
 def send_game_state(player_id):
-    """Send current game state to a player"""
     if clients[player_id]:
         state_msg = "STATE:" + ",".join(game_state) + ":" + str(current_turn)
         try:
@@ -21,73 +20,55 @@ def send_game_state(player_id):
             print(f"Failed to send state to Player {player_id + 1}")
 
 def broadcast_game_state():
-    """Send game state to both players"""
     for i in range(2):
         send_game_state(i)
 
 def check_winner():
-    """Check if there's a winner or tie"""
-    # Check rows
     for i in range(0, 9, 3):
-        if game_state[i] and game_state[i] == game_state[i+1] == game_state[i+2]:
+        if game_state[i] != " " and game_state[i] == game_state[i+1] == game_state[i+2]:
             return game_state[i]
-    
-    # Check columns
     for i in range(3):
-        if game_state[i] and game_state[i] == game_state[i+3] == game_state[i+6]:
+        if game_state[i] != " " and game_state[i] == game_state[i+3] == game_state[i+6]:
             return game_state[i]
-    
-    # Check diagonals
-    if game_state[0] and game_state[0] == game_state[4] == game_state[8]:
+    if game_state[0] != " " and game_state[0] == game_state[4] == game_state[8]:
         return game_state[0]
-    if game_state[2] and game_state[2] == game_state[4] == game_state[6]:
+    if game_state[2] != " " and game_state[2] == game_state[4] == game_state[6]:
         return game_state[2]
-    
-    # Check for tie (board full)
-    if all(cell != "" for cell in game_state):
+    if all(cell != " " for cell in game_state):
         return "TIE"
-    
     return None
 
 def handle_client(client, player_id):
-    """Handle communication with a client"""
     global current_turn, game_active
     print(f"Thread started for Player {player_id + 1}")
     other_id = 1 - player_id
     symbol = "X" if player_id == 0 else "O"
-    
+
     try:
-        # Wait for both players to connect
         while not all(clients):
             time.sleep(0.1)
-        
-        # Start the game
+
         with lock:
-            if player_id == 0:  # Only Player 1 triggers the game start
+            if player_id == 0 and not game_active:
                 game_active = True
                 print("Game starts!")
                 broadcast_game_state()
-        
-        # Main game loop
-        while game_active:
+
+        while True:
             try:
-                data = client.recv(1024).decode().strip()
+                data = client.recv(4096).decode().strip()
                 if not data:
                     print(f"Player {player_id + 1} disconnected.")
                     break
-                
+
                 print(f"Received from Player {player_id + 1}: {data}")
-                
-                # Process move command
+
                 if data.startswith("MOVE:") and current_turn == player_id:
                     try:
                         position = int(data.split(":")[1])
                         with lock:
-                            if 0 <= position <= 8 and game_state[position] == "":
+                            if 0 <= position <= 8 and game_state[position] == " ":
                                 game_state[position] = symbol
-                                current_turn = other_id  # Switch turns
-                                
-                                # Check for winner after move
                                 winner = check_winner()
                                 if winner:
                                     if winner == "TIE":
@@ -96,24 +77,23 @@ def handle_client(client, player_id):
                                         winning_player = 0 if winner == "X" else 1
                                         broadcast_message(f"RESULT:WIN:{winning_player}")
                                     game_active = False
-                                
+                                else:
+                                    current_turn = other_id
                                 broadcast_game_state()
-                    except (ValueError, IndexError):
+                    except ValueError:
                         print(f"Invalid move format from Player {player_id + 1}")
-                
+
                 elif data == "RESET" and not game_active:
                     with lock:
-                        if player_id == 0:  # Only Player 1 can reset
+                        if player_id == 0:
                             reset_game()
                             broadcast_message("RESET")
                             broadcast_game_state()
-                
+
             except Exception as e:
                 print(f"Error with Player {player_id + 1}: {e}")
                 break
-                
-    except Exception as e:
-        print(f"Connection error with Player {player_id + 1}: {e}")
+
     finally:
         with lock:
             if clients[player_id] == client:
@@ -124,7 +104,6 @@ def handle_client(client, player_id):
         print(f"Connection closed for Player {player_id + 1}")
 
 def broadcast_message(message):
-    """Send a message to all connected clients"""
     for i in range(2):
         if clients[i]:
             try:
@@ -133,58 +112,41 @@ def broadcast_message(message):
                 print(f"Failed to send message to Player {i + 1}")
 
 def reset_game():
-    """Reset the game state"""
     global game_state, current_turn, game_active
-    game_state = [""] * 9
+    game_state = [" "] * 9
     current_turn = 0
     game_active = True
     print("Game reset")
 
-# Start the server
 def start_server():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Enable port reuse
-    
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         server_socket.bind((HOST, PORT))
         server_socket.listen(2)
         print(f"Server started on {HOST}:{PORT}. Waiting for players...")
-        
+
         while True:
-            try:
-                client, addr = server_socket.accept()
-                
-                # Find available player slot
-                player_id = None
-                with lock:
-                    for i in range(2):
-                        if clients[i] is None:
-                            clients[i] = client
-                            player_id = i
-                            break
-                
-                if player_id is not None:
-                    print(f"Player {player_id + 1} connected from {addr}")
-                    client.send(f"ID:{player_id}".encode())  # Send player ID
-                    
-                    # Start thread for this client
-                    thread = threading.Thread(target=handle_client, args=(client, player_id), daemon=True)
-                    thread.start()
-                else:
-                    # Game is full
-                    client.send("FULL".encode())
-                    client.close()
-                    print(f"Rejected connection from {addr}: game full")
-            
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                print(f"Error accepting connection: {e}")
-    
+            client, addr = server_socket.accept()
+            player_id = None
+            with lock:
+                for i in range(2):
+                    if clients[i] is None:
+                        clients[i] = client
+                        player_id = i
+                        break
+            if player_id is not None:
+                print(f"Player {player_id + 1} connected from {addr}")
+                client.send(f"ID:{player_id}".encode())
+                thread = threading.Thread(target=handle_client, args=(client, player_id), daemon=True)
+                thread.start()
+            else:
+                client.send("FULL".encode())
+                client.close()
+                print(f"Rejected connection from {addr}: game full")
     except Exception as e:
         print(f"Server error: {e}")
     finally:
-        # Clean up
         for c in clients:
             if c:
                 try:
